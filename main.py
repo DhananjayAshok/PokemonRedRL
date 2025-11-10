@@ -1,6 +1,7 @@
 from utils.parameter_handling import load_parameters, compute_secondary_parameters
 from utils.log_handling import log_warn
 import click
+from environment import RedGymEnv
 
 
 loaded_parameters = load_parameters()
@@ -20,6 +21,9 @@ def main(ctx, **input_parameters):
         utils/log_handling.py you pass in the parameters dict, otherwise there will be a mixup."
         log_warn(warning_msg, parameters=loaded_parameters)
     ctx.obj = loaded_parameters
+    log_warn("Testing environment creation", parameters=loaded_parameters)
+    env = RedGymEnv(loaded_parameters)
+    breakpoint()
 
 # Implement custom commands as functions in a separate file in the following way:
 """
