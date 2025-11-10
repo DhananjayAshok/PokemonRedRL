@@ -1,0 +1,4 @@
+random_seed: 42
+results_dir: "PLACEHOLDER" # Path to the directory where results will be saved, meant for lightweight files, plots and logs
+figure_force_save: True # Indicates whether the Plotter object should save a figure or display it. In envs with no display you'll want to set this to True
+WANDB_PROJECT: "PLACEHOLDER" # This is more for bash than for within python. Will set the wandb logger to the right project
