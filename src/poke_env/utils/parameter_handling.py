@@ -1,6 +1,6 @@
 import os
 import yaml
-from utils.fundamental import get_logger
+from poke_env.utils.fundamental import get_logger
 
 
 def load_yaml(yaml_path):
@@ -13,9 +13,8 @@ def compute_secondary_parameters(params):
     params["model_dir"] = os.path.join(params["storage_dir"], "models")
     params["tmp_dir"] = os.path.join(params["storage_dir"], "tmp")
     params["sync_dir"] = os.path.join(params["storage_dir"], "sync")
-    params["log_dir"] = os.path.join(params["results_dir"], "logs")
-    params["figure_dir"] = os.path.join(params["results_dir"], "figures")    
-    for dirname in ["data_dir", "model_dir", "log_dir", "figure_dir", "tmp_dir", "sync_dir"]:
+    params["log_dir"] = os.path.join(params["storage_dir"], "logs")
+    for dirname in ["data_dir", "model_dir", "log_dir", "tmp_dir", "sync_dir"]:
         if not os.path.exists(params[dirname]):
             os.makedirs(params[dirname])
     if "log_file" not in params:
@@ -44,8 +43,8 @@ def load_parameters(parameters=None):
         if "logger" not in parameters: # this is a flag that secondary parameters need to be computed
             compute_secondary_parameters(parameters)
         return parameters
-    essential_keys = ["storage_dir", "results_dir", "figure_force_save"]
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    essential_keys = ["storage_dir"]
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     params = {"project_root": project_root}
     logger = get_logger()
     config_files = os.listdir(os.path.join(project_root, "configs"))
@@ -78,5 +77,11 @@ def load_parameters(parameters=None):
     else:
         os.makedirs(params['storage_dir'])
         logger.info(f"Created storage directory {params['storage_dir']}")
+    # For every path, see if it looks relative, and if so, make it absolute based on project_root
+    for key in params:
+        if isinstance(params[key], str):
+            try_path = os.path.join(project_root, params[key])
+            if os.path.exists(try_path):
+                params[key] = os.path.abspath(try_path)
     compute_secondary_parameters(params)
     return params

@@ -1,5 +1,5 @@
-from utils.fundamental import meta_dict_to_str
-from utils.parameter_handling import load_parameters
+from poke_env.utils.fundamental import meta_dict_to_str
+from poke_env.utils.parameter_handling import load_parameters
 
 
 def log_error(message, parameters=None):

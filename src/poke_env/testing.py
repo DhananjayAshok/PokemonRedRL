@@ -1,7 +1,7 @@
-from utils.parameter_handling import load_parameters, compute_secondary_parameters
-from utils.log_handling import log_warn
+from poke_env.utils.parameter_handling import load_parameters, compute_secondary_parameters
+from poke_env.utils.log_handling import log_warn
 import click
-from environment import RedGymEnv
+from poke_env.emulators import PokemonRedEmulator
 
 
 loaded_parameters = load_parameters()
@@ -22,22 +22,28 @@ def main(ctx, **input_parameters):
         log_warn(warning_msg, parameters=loaded_parameters)
     ctx.obj = loaded_parameters
     log_warn("Testing environment creation", parameters=loaded_parameters)
-    env = RedGymEnv(loaded_parameters)
+    env = PokemonRedEmulator(parameters=loaded_parameters)
+    env.reset()
+    while True:
+        env.pyboy.tick(1, True)
+        env.render()
+        truncated = env.step_count >= env.max_steps - 1
+        if truncated:
+            break
+    env.close()
     breakpoint()
 
 # Implement custom commands as functions in a separate file in the following way:
-"""
 @click.command()
 @click.option("--example_option")
 @click.pass_obj
 def example_command(parameters, example_option):
     # have access to parameters here with any additional arguments that are specific to the script
     pass
-"""
 # Then add the custom command to the main group like this:
-"""
+
 main.add_command(example_command, name="example_command")
-"""
+
 
 if __name__ == "__main__":
     main()

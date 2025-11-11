@@ -1,0 +1,3 @@
+pokemon_red_gb_path: "rom_data/pokemon_red/PokemonRed.gb"
+pokemon_red_default_state: "rom_data/pokemon_red/states/default.state"
+pokemon_red_map_data_path: "rom_data/pokemon_red/map_data.json"

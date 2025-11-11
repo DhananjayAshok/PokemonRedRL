@@ -1,1 +1,8 @@
-press_step: 8
+gameboy_action_freq: 24
+gameboy_press_step: 8
+gameboy_video_frame_stacks: 3
+gameboy_headless_emulation_speed: 6
+gameboy_max_steps: 10000
+gameboy_hard_max_steps: 1000000
+gameboy_default_save_video: false
+gameboy_default_fast_video: true

@@ -1,3 +1,1 @@
 random_seed: 42
-results_dir: "results" # Path to the directory where results will be saved, meant for lightweight files, special plots and sparse logs
-figure_force_save: True # Indicates whether the Plotter object should save a figure or display it. In envs with no display you'll want to set this to True
