@@ -4,7 +4,7 @@ import uuid
 from poke_env.utils import load_parameters, log_error, log_warn, file_makedir, log_info, is_none_str
 
 
-import mediapy as media
+import cv2
 from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from matplotlib import pyplot as plt
@@ -98,11 +98,16 @@ class Emulator():
         self.act_freq = parameters["gameboy_action_freq"]
         self.press_step = parameters["gameboy_press_step"]
         self.frame_stacks = parameters["gameboy_video_frame_stacks"]
+        self.render_headless = parameters["gameboy_headless_render"]
         self.full_frame_writer = None
         self.model_frame_writer = None
         self.reset_count = 0
         self.step_count = 0
-        self.output_shape = (72, 80, self.frame_stacks)
+        self.reduce_video_resolution = parameters["gameboy_reduce_video_resolution"]
+        if self.reduce_video_resolution:
+            self.output_shape = (80, 72, self.frame_stacks)
+        else:
+            self.output_shape = (160, 144, self.frame_stacks)
 
         head = "null" if self.headless else "SDL2"
 
@@ -117,6 +122,32 @@ class Emulator():
             if not is_none_str(self.parameters["gameboy_headed_emulation_speed"]):
                 self.pyboy.set_emulation_speed(int(self.parameters["gameboy_headed_emulation_speed"]))        
         
+    
+    def clear_unamed_sessions(self):
+        """
+        Clears all unnamed sessions from the session directory.
+        """
+        storage_dir = self.parameters["storage_dir"]
+        session_path = os.path.join(storage_dir, "sessions", self.get_env_variant())
+        if not os.path.exists(session_path):
+            return
+        existing_sessions = os.listdir(session_path)
+        saved_sessions = [self.session_name]
+        for session in existing_sessions:
+            if session.startswith("session_"):
+                session_id = session.split("_")[-1]
+                if session_id.isdigit():
+                    full_path = os.path.join(session_path, session)
+                    # delete the session directory and all its contents
+                    import shutil
+                    shutil.rmtree(full_path)
+                    log_info(f"Deleted unnamed session {full_path}", self.parameters)
+                    continue
+            saved_sessions.append(session)
+        log_info(f"Kept sessions: {saved_sessions}", self.parameters)
+        
+        
+    
     def get_session_path(self) -> str:
         """
         Returns the path to the session directory for this environment variant.
@@ -174,17 +205,20 @@ class Emulator():
 
         self.reset_count += 1
         self.step_count = 0
+        self.close_video()
         return
 
-    def render(self, reduce_res: bool = True) -> np.ndarray:
+    def get_current_frame(self, reduce_res: bool = None) -> np.ndarray:
         """_summary_
-        Renders the current screen of the emulator.
+        Renders the currently rendered screen of the emulator and returns it as a numpy array.
         Args:
-            reduce_res (bool, optional): Whether to reduce the resolution of the rendered image. Defaults to True.
+            reduce_res (bool, optional): Whether to reduce the resolution of the rendered image. Defaults to gameboy_reduce_video_resolution.
         Returns:
             np.ndarray: The rendered image as a numpy array.
         """ 
         game_pixels_render = self.pyboy.screen.ndarray[:,:,0:1]  # (144, 160, 3)
+        if reduce_res is None:
+            reduce_res = self.reduce_video_resolution
         if reduce_res:
             game_pixels_render = (
                 downscale_local_mean(game_pixels_render, (2,2,1))
@@ -203,13 +237,17 @@ class Emulator():
         Returns:
             bool: Whether the max_steps limit is reached.
         """
-        if action not in LowLevelActions:
-            log_error(f"Invalid action {action}. Must be one of {list(LowLevelActions)}", self.parameters)
+        if action is not None:
+            if action not in LowLevelActions:
+                log_error(f"Invalid action {action}. Must be one of {list(LowLevelActions)}", self.parameters)
         if self.step_count >= self.max_steps:
             log_error("Step called after max_steps reached. Please reset the environment.", self.parameters)
             
         if self.save_video and self.step_count == 0:
             self.start_video()
+        
+        if self.save_video or self.video_running: # TODO: Consider alternative ways of handling this
+            self.add_video_frame()
 
         self.run_action_on_emulator(action)
 
@@ -219,7 +257,7 @@ class Emulator():
 
         return step_limit_reached
     
-    def run_action_on_emulator(self, action: LowLevelActions):
+    def run_action_on_emulator(self, action: LowLevelActions, profile: bool = False, render: bool = None):
         """_summary_
         
         Performs the given action on the emulator by pressing and releasing the corresponding button.
@@ -228,69 +266,102 @@ class Emulator():
             action (LowLevelActions): Lowest level action to perform on the emulator.
         """
         # press button then release after some steps
-        #log_info(f"Running action: {action}", self.parameters)
-        start_time = perf_counter()
-        self.pyboy.send_input(action.value)
-        end_time = perf_counter()
-        # Convert to milliseconds and seconds
-        elapsed_time_ms = (end_time - start_time) * 1000
-        elapsed_time_s = (end_time - start_time)
-        #log_info(f"Action {action} took {elapsed_time_ms:.2f} ms or {elapsed_time_s:.2f} s", self.parameters)  # Output: Action LowLevelActions.PRESS_ARROW_LEFT took 0.01 ms or 0.00 s
-        # disable rendering when we don't need it
-        render_screen = self.save_video or not self.headless
-        press_step = self.press_step
-        self.pyboy.tick(press_step, render_screen)
-        #log_info(f"Completed {press_step} ticks after pressing action {action}", self.parameters)
-        start_time = perf_counter()
-        self.pyboy.send_input(LowLevelActions.release_actions.value[action.value])
-        mid_time = perf_counter()
-        self.pyboy.tick(self.act_freq - press_step - 1, render_screen)
-        end_time = perf_counter()
-        start_to_mid_ms = (mid_time - start_time) * 1000
-        mid_to_end_ms = (end_time - mid_time) * 1000
-        #log_info(f"Releasing action {action} took {start_to_mid_ms:.2f} ms, followed by {mid_to_end_ms:.2f} ms for remaining ticks", self.parameters) # Output: Releasing action LowLevelActions.PRESS_ARROW_LEFT took 0.00 ms, followed by 16.13 ms for remaining ticks
-        self.pyboy.tick(1, True)
-        #log_info(f"Completed total of {self.act_freq} ticks for action {action}", self.parameters)
-        if self.save_video and self.fast_video:
-            self.add_video_frame()
-    
-    def start_video(self):
-        if self.full_frame_writer is not None:
-            self.full_frame_writer.close()
-        if self.model_frame_writer is not None:
-            self.model_frame_writer.close()
+        #log_info(f"Running action: {action}", self.parameters)        
+        if action is not None:
+            if profile:
+                start_time = perf_counter()
+            self.pyboy.send_input(action.value)
+            if profile:
+                end_time = perf_counter()
+                # Action LowLevelActions.PRESS_ARROW_LEFT took 0.01 ms or 0.00 s
 
+            # disable rendering when we don't need it
+            if render is not None:
+                render_screen = render
+            else:
+                render_screen = self.save_video or not self.headless or self.render_headless
+            press_step = self.press_step
+            self.pyboy.tick(press_step, render_screen)
+            if profile:
+                start_time = perf_counter()
+            self.pyboy.send_input(LowLevelActions.release_actions.value[action.value])
+            if profile:
+                mid_time = perf_counter()
+            self.pyboy.tick(self.act_freq - press_step - 1, render_screen)
+            if profile:
+                end_time = perf_counter()
+            # Releasing action LowLevelActions.PRESS_ARROW_LEFT took 0.00 ms, followed by 16.13 ms for remaining ticks
+            self.pyboy.tick(1, True)
+            if self.save_video and self.fast_video:
+                self.add_video_frame()
+        else:
+            log_warn("No action provided to run_action_on_emulator. Skipping action. You probably should only ever use this in human mode", self.parameters)
+            self.pyboy.tick(self.act_freq, True)
+    
+    def get_free_video_id(self) -> str:
+        base_dir = os.path.join(self.session_path, "videos")
+        videos = os.listdir(base_dir) if os.path.exists(base_dir) else []
+        # all will be something.mp4, if its int.mp4, get the int
+        video_ints = []
+        for video in videos:
+            if video.endswith(".mp4"):
+                video_name = video[:-4]
+                if video_name.isdigit():
+                    video_ints.append(int(video_name))
+        if len(video_ints) == 0:
+            return "0.mp4"
+        return str(max(video_ints) + 1)+".mp4"
+        
+    def start_video(self, video_id: str = None):
+        """_summary_
+        """
+        if video_id is not None:
+            if not isinstance(video_id, str):
+                log_error("video_id must be a string (not digits) if provided.", self.parameters)
+            if not video_id.endswith(".mp4"):
+                log_error("video_id must end with .mp4 if provided.", self.parameters)
+            if os.path.exists(os.path.join(self.session_path, "videos", video_id)):
+                log_warn(f"video_id {video_id} already exists. Overwriting...", self.parameters)                       
+        else:
+            video_id = self.get_free_video_id()
         base_dir = os.path.join(self.session_path, "videos")
         os.makedirs(base_dir, exist_ok=True)
-        full_name = os.path.join(base_dir, f"full_reset_{self.reset_count}_id{self.instance_id}.mp4")
-        model_name = os.path.join(base_dir, f"model_reset_{self.reset_count}_id{self.instance_id}.mp4")
-        self.full_frame_writer = media.VideoWriter(full_name, (144, 160), fps=60, input_format="gray") #TODO: check that the resolution is not specific to Pokemon Red
-        self.full_frame_writer.__enter__()
-        self.model_frame_writer = media.VideoWriter(model_name, self.output_shape[:2], fps=60, input_format="gray")
-        self.model_frame_writer.__enter__()
+        full_name = os.path.join(base_dir, f"full_{video_id}")
+        model_name = os.path.join(base_dir, f"model_{video_id}")
+        self.close_video()
+        self.frame_writer = cv2.VideoWriter(model_name, cv2.VideoWriter_fourcc(*"mp4v"), 60, (self.output_shape[0], self.output_shape[1]), isColor=False)
+        self.video_running = True
 
     def add_video_frame(self):
-        self.full_frame_writer.add_image(
-            self.render(reduce_res=False)[:,:,0]
-        )
-        self.model_frame_writer.add_image(
-            self.render(reduce_res=True)[:,:,0]
-        )
-            
+        current_frame = self.get_current_frame(reduce_res=self.reduce_video_resolution)[:, :, 0]
+        frame_size = (current_frame.shape[1], current_frame.shape[0]) # Width, Height, should be equal to self.frame_size and self.output_shape[:2]
+        print(self.output_shape[:2], frame_size)
+        # Create VideoWriter object
+        frame = current_frame
+        self.frame_writer.write(frame)
+                    
     def check_if_done(self):
         done = self.step_count >= self.max_steps - 1
         return done
 
-    def close(self):
-        self.pyboy.stop(save=False) # TODO: check if this is the correct way to close the pyboy emulator
+    def close_video(self):
         if self.full_frame_writer is not None:
-            self.full_frame_writer.close()
+            self.full_frame_writer.release()
+            self.full_frame_writer = None
         if self.model_frame_writer is not None:
-            self.model_frame_writer.close()
+            self.model_frame_writer.release()
+            self.model_frame_writer = None
+        self.video_running = False
+    
+
+    def close(self):
+        self.pyboy.stop(save=False) # TODO: check if this is the correct way to close the pyboy emulator. It gives errors. 
+        self.close_video()
         # check if session directory is empty, and if so delete it
         if os.path.exists(self.session_path) and len(os.listdir(self.session_path)) == 0:
             os.rmdir(self.session_path)
     
+
     def human_play(self, max_steps: int = None):
         """_summary_
         
@@ -335,18 +406,27 @@ class Emulator():
             "d": LowLevelActions.PRESS_ARROW_DOWN,
             "l": LowLevelActions.PRESS_ARROW_LEFT,
             "r": LowLevelActions.PRESS_ARROW_RIGHT,            
+            "": None,
         }
-        log_info("Starting human play mode. Use keyboard inputs: a,b,s,u,d,l,r to play. Type e to exit.", self.parameters)
-        log_info(f"Character to action mapping: \n{character_to_action}", self.parameters)        
+        msg = "Starting human play mode. Use keyboard inputs: a,b,s,u,d,l,r to play. Type v to start recording, c to end recording, e to exit."
+        log_info(msg, self.parameters)
+        log_info(f"Character to action mapping: \n{character_to_action}", self.parameters)
         self.reset()
         exited = False
         while not exited:
-            user_input = input("Enter action (a,b,s,u,d,l,r) or e to exit: ")
+            user_input = input(msg + "\nYour input: ")
             user_input = user_input.lower().strip()
             if user_input == "e":
                 exited = True
                 log_info("Exiting human play mode.", self.parameters)
                 break
+            if user_input == "v":
+                self.start_video()
+                continue
+            if user_input == "c":
+                self.close_video()
+                log_info("Stopped recording video.", self.parameters)                
+                continue
             if user_input not in character_to_action:
                 log_warn(f"Invalid input {user_input}. Valid inputs are: {list(character_to_action.keys())} or e to exit.", self.parameters)
                 continue
@@ -357,8 +437,6 @@ class Emulator():
                 break
         
         
-        
-    
     def save_render(self):
         render_path = os.path.join(self.session_path, "renders", f"step_{self.step_count}_id{self.instance_id}.jpeg")
         file_makedir(render_path)
