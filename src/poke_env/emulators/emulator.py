@@ -88,9 +88,6 @@ class GameStateParser(ABC):
         start = f"***\tGameStateParser({self.__repr__()})\t***"
         body = nested_dict_to_str(self.parsed_variables, indent=1)
         return f"{start}\n{body}"
-
-        
-
     
 
 
@@ -296,7 +293,8 @@ class Emulator(ABC):
         self.run_action_on_emulator(action)
         self.game_state_parser.parse_step()
 
-        self.game_state_parser.parsed_variables["done"] = self.check_if_done()
+        if self.check_if_done():
+            self.game_state_parser.parsed_variables["done"] = True
 
         self.step_count += 1
 
