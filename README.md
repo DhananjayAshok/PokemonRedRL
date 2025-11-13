@@ -1,6 +1,6 @@
 <p align="center">
   <picture>
-    <img alt="Pokemon Environments" src="assets/blackicon.png"   width="400" height="300" style="max-width: 100%;">
+    <img alt="Pokemon Environments" src="assets/blackicon.png"   width="500" height="400" style="max-width: 100%;">
   </picture>
   <br/>
   <br/>

@@ -26,6 +26,9 @@ class GameInfo:
         
 
 class PokemonRedGameStateParser(GameStateParser):
+    """
+    Reads from memory addresses to form the state: https://github.com/pret/pokered/blob/symbols/pokered.sym
+    """
     PAD = 20
     GLOBAL_MAP_SHAPE = (444 + PAD * 2, 436 + PAD * 2)
     MAP_ROW_OFFSET = PAD
