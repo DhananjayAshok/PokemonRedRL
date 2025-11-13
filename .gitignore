@@ -176,4 +176,4 @@ cython_debug/
 setup/.venv
 storage/
 results/
-rom_data/pokemon_red/PokemonRed.gb
+rom_data/pokemon_red/PokemonRed.*

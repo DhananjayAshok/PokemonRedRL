@@ -5,6 +5,7 @@ description = "A wrapper with emulation, state parsing and low-level control mod
 readme = "README.md"
 requires-python = ">=3.12.2"
 dependencies = [
+    "bidict>=0.23.1",
     "click>=8.3.0",
     "matplotlib>=3.10.7",
     "numpy>=2.3.4",

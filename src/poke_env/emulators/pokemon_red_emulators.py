@@ -5,9 +5,11 @@
 from poke_env.utils import log_warn, log_info, log_error, load_parameters
 from poke_env.emulators.emulator import Emulator, GameStateParser
 
+import os
+
 import json
 import numpy as np
-import os
+from bidict import bidict
 
 
 event_flags_start = 0xD747
@@ -33,14 +35,78 @@ class PokemonRedGameStateParser(GameStateParser):
     GLOBAL_MAP_SHAPE = (444 + PAD * 2, 436 + PAD * 2)
     MAP_ROW_OFFSET = PAD
     MAP_COL_OFFSET = PAD
-
     def __init__(self, pyboy, parameters):
         super().__init__(pyboy, parameters)
         # load event names (parsed from https://github.com/pret/pokered/blob/91dc3c9f9c8fd529bb6e8307b58b96efa0bec67e/constants/event_constants.asm)
         events_location = self.parameters["pokemon_red_events_path"]
         with open(events_location) as f:
-            event_names = json.load(f)
-        self.event_names = event_names
+            event_slots = json.load(f)
+        event_slots = event_slots
+        event_names = {v: k for k, v in event_slots.items() if not v[0].isdigit()}
+        beat_opponent_events = bidict()
+        def _pop(d, keys):
+            for key in keys:
+                d.pop(key, None)        
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name.startswith("Beat "):
+                beat_opponent_events[name.replace("Beat ", "")] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        self.beat_opponent_events = beat_opponent_events
+        tms_obtained_events = bidict()
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name.startswith("Got Tm"):
+                tms_obtained_events[name.replace("Got ", "").strip()] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        self.tms_obtained_events = tms_obtained_events
+        hm_obtained_events = bidict()
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name.startswith("Got Hm"):
+                hm_obtained_events[name.replace("Got ", "").strip()] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        self.hm_obtained_events = hm_obtained_events
+        passed_badge_check_events = bidict()
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name.startswith("Passed ") and "badge" in name:
+                passed_badge_check_events[name.replace("Passed ", "").replace(" Check", "").strip()] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        self.passed_badge_check_events = passed_badge_check_events
+        self.key_items_obtained_events = bidict()
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name.startswith("Got "):
+                self.key_items_obtained_events[name.replace("Got ", "").strip()] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        self.map_events = {"Cinnabar Gym": bidict(), "Victory Road": bidict(), "Silph Co": bidict(), "Seafoam Islands": bidict()}
+        for name, slot in event_names.items():
+            if name.startswith("Cinnabar Gym Gate") and name.endswith("Unlocked"):
+                self.map_events["Cinnabar Gym"][name] = slot
+                pop_queue.append(name)
+            elif name.startswith("Victory Road") and "Boulder On" in name:
+                self.map_events["Victory Road"][name] = slot
+                pop_queue.append(name)
+            elif name.startswith("Silph Co") and "Unlocked" in name:
+                self.map_events["Silph Co"][name] = slot
+                pop_queue.append(name)
+            elif name.startswith("Seafoam"):
+                self.map_events["Seafoam Islands"][name] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
+        cutscene_events = bidict()
+        cutscenes = ["Event 001", "Daisy Walking", "Pokemon Tower Rival On Left", "Seel Fan Boast", "Pikachu Fan Boast", "Lab Handing Over Fossil Mon", "Route22 Rival Wants Battle"] # my best guess, need to verify, Silph Co Receptionist At Desk? Autowalks?
+
+
+        self.special_events = bidict(event_names)
+
+
         self.essential_map_locations = {
             v:i for i,v in enumerate([
                 40, 0, 12, 1, 13, 51, 2, 54, 14, 59, 60, 61, 15, 3, 65
@@ -152,7 +218,18 @@ class PokemonRedGameStateParser(GameStateParser):
         pass
 
     def parse_step(self):
-        breakpoint()
+        self.parsed_variables["local_coords"] = self.get_game_coords()
+        self.parsed_variables["global_coords"] = self.get_global_coords()
+        self.parsed_variables["in_battle"] = self.isinbattle()
+        self.parsed_variables["party_size"] = self.get_party_size()
+        self.parsed_variables["party_levels"] = self.read_party_levels()
+        self.parsed_variables["badges"] = self.get_badges()
+        self.parsed_variables["hp_fraction"] = self.read_hp_fraction()
+        self.parsed_variables["event_flags"] = self.read_event_bits()
+        self.parsed_variables["opponent_levels"] = self.get_opponent_levels()
+        self.parsed_variables["player_level"] = self.get_levels()[0]
+        self.parsed_variables["event_flags"] = self.read_event_bits()
+        self.parsed_variables["opponent_levels"] = self.get_opponent_levels()
 
 
 

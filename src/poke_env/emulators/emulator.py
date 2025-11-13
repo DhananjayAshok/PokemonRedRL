@@ -4,6 +4,9 @@ from typing import Type
 
 
 import os
+from time import perf_counter
+import sys
+import shutil
 import uuid
 from poke_env.utils import load_parameters, log_error, log_warn, file_makedir, log_info, is_none_str, nested_dict_to_str
 
@@ -13,9 +16,7 @@ from pyboy import PyBoy
 from pyboy.utils import WindowEvent
 from matplotlib import pyplot as plt
 from skimage.transform import downscale_local_mean
-from time import perf_counter
 import numpy as np
-from time import sleep
 
 
 def allocate_new_session_name(parameters, session_path):
@@ -295,6 +296,7 @@ class Emulator(ABC):
 
         if self.check_if_done():
             self.game_state_parser.parsed_variables["done"] = True
+        print(self.game_state_parser)
 
         self.step_count += 1
 
@@ -412,8 +414,15 @@ class Emulator(ABC):
         if self.headless:
             log_error("Human play mode requires headless=False. Change the initialization", self.parameters)    
         self.reset()
+        self.game_state_parser.parse_step()
+        starting_state = str(self.game_state_parser)
         while True:
             self.pyboy.tick(1, True)
+            self.game_state_parser.parse_step()
+            new_state = str(self.game_state_parser)
+            if new_state != starting_state:
+                log_info(f"Current game state:\n{new_state}", self.parameters)
+                starting_state = new_state
             if self.step_count >= max_steps:
                 break
 
@@ -475,6 +484,51 @@ class Emulator(ABC):
         render_path = os.path.join(self.session_path, "renders", f"step_{self.step_count}_id{self.instance_id}.jpeg")
         file_makedir(render_path)
         plt.imsave(render_path, self.render(reduce_res=False)[:,:, 0])
+
+    def save_state(self, state_path: str):
+        if not state_path.endswith(".state"):
+            state_path = state_path + ".state"
+        with open(state_path, "wb") as f:
+            self.pyboy.save_state(f)
+        log_info(f"Saved state to {state_path}", self.parameters)
+
+    def _sav_to_state(self, save_path: str):
+        """
+        Loads a .sav file into the emulator and saves the corresponding .state file. 
+        Use this if you want to manually create .sav files and convert them to .state files for use as initial states.
+
+        Args:
+            save_path (str): Path to save the .state file
+        Expects there to be a .sav file with the same path+name as the self.gb_path (but with .sav extension).
+        """
+        log_info("Trying to find .sav file and convert to .state file. This is a breaking operation, so the program will terminate after its completion.", self.parameters)
+        expected_sav = self.gb_path.replace(".gb", ".sav")
+        if not os.path.exists(expected_sav):
+            log_error(f"Expected .sav file at {expected_sav} to convert to .state file, but it does not exist.", self.parameters)
+        if save_path is None or save_path == "":
+            log_error("You must provide a save_path to save the .state file.", self.parameters)
+        file_makedir(save_path)
+        # copy the .sav file to a .gb.ram file
+        shutil.copyfile(expected_sav, expected_sav.replace(".sav", ".gb.ram"))
+        self.close()
+        self.pyboy = PyBoy(
+            self.gb_path,
+            window="null",
+        )
+        self.pyboy.set_emulation_speed(0)
+        self.pyboy.tick(10000, False) # get to opening menu
+        self.run_action_on_emulator(LowLevelActions.PRESS_BUTTON_A, render=True) # press A to get past opening menu
+        self.pyboy.tick(1000, False) # wait for load
+        self.run_action_on_emulator(LowLevelActions.PRESS_BUTTON_A, render=True) # press A to load game
+        self.pyboy.tick(1000, False) # wait for file select
+        self.run_action_on_emulator(LowLevelActions.PRESS_BUTTON_A, render=True) # press A to confirm load
+        self.pyboy.tick(5000, False) # wait for game to load
+        self.save_state(save_path)
+        self.pyboy.stop(save=False)
+        log_info("Exiting now to avoid issues.", self.parameters)
+        sys.exit(0)
+
+
             
     @abstractmethod
     def get_env_variant(self) -> str:
