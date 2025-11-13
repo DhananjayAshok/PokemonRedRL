@@ -29,6 +29,8 @@ jobs:
       - run: pip install uv
       - run: uv sync
       - run: source .venv/bin/activate
+      - run: which python && pip list
+      - run: uv pip install pdoc
       - run: uv pip install -e .
       # ADJUST THIS: build your documentation into docs/.
       # We use a custom build script for pdoc itself, ideally you just run `pdoc -o docs/ ...` here.
