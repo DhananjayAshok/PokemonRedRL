@@ -3,8 +3,10 @@
 
 
 from poke_env.utils import log_warn, log_info, log_error, load_parameters
+from poke_env.emulators.structs import Pokemon
 from poke_env.emulators.emulator import Emulator, GameStateParser
 
+from typing import Set, List
 import os
 
 import json
@@ -18,6 +20,78 @@ museum_ticket = (0xD754, 0)
 # TODO: Do you need these?
 
 
+
+class ControlProcedures:
+    # TODO: Must implement the following
+    # Autobattler (simple, first check if there is an attacking move in any pokemons slots. If so and not active, switch into it. Then spam that attack)
+    # This is meant to be used with nerf_opponents to allow simulation without fear of battles getting in the way. 
+    # A* pathfinding towards a given coordinate. 
+    # Menu: Open Items, Open Pokemon, 
+    # Open Map, Exit Map
+    # Throw Ball
+    # Show inventory 
+    # Use Specific Item (e.g. Antidote etc) (String Based) You must establish the mapping to game id and get that done
+    # Use Item on Pokemon 
+    # Run from Battle
+    # Show other pokemon info
+    # Check Pokemon Info
+    # Switch to Pokemon
+    # Maybe set up an OCR on the frame to catch some amount of string mapping (i.e. catch cant use that )
+        # Then you can have OCR on a sign
+    # Simple mappings of interact with NPC or sign. 
+    # Move in direction (for a specified number of steps)
+    # Try to Buy x Items
+    # 
+    pass
+    # TODO: See if you can find a way to draw the local coordinate system on your map. To help the VLM specify pathfinding coordinates. 
+"""
+Action Spaces: 
+Open World, No Window open:
+    Move:
+        Move(direction, steps): either returns success message or failure and early exit (could be wild pokemon, could be trainer, could be obstacle). 
+        Move(x, y): Try to move towards this coordinate using A* algorithm. 
+    Interact: Basically press A
+    Inventory:
+        Search(Item Name): return [not an item or the count of item in bag]
+        List items: List all items in bag
+        Use(Item Name):
+            For each item, perhaps have an argument input (i.e. Use Potion on [Pokemon Name])
+    Pokemon:
+        List: List all Pokemon
+        Check(Pokemon Name)
+        Check_all
+        SwitchFirst(Pokemon): Switches a new pokemon to the first slot in the party
+    Fly: (If there is a fly pokemon in inventory)
+
+
+Battle:
+    Fight:
+        Attack(name): either says attack not found or uses the attack
+    Inventory:
+        List
+        Search(Item Name)
+        Use(Item Name)
+    Throw Ball(Ball Kind)
+    Pokemon:
+        List
+        Check(Pokemon Name)
+        Switch(Pokemon Name)
+    Run
+
+Conversation: (Hard?)
+    Continue
+
+Menu / Options: (HARD)
+    Select specific option
+
+Manual:
+    All controls (other than Enter)    
+"""
+
+
+
+
+
 class GameInfo:
     def __init__(self, parameters):
         self.data = {}
@@ -27,10 +101,26 @@ class GameInfo:
     def reset(self):
         self.data = {}
         
+class Hacker:
+    def __init__(self, pyboy):
+        self.pyboy = pyboy
+
+    def disable_wild_encounters(self):
+        """
+        TODO: 
+        """
+        self.pyboy.memory[0xd887] = 0 # grass rate
+        self.pyboy.memory[0xd8a4] = 0
+
+    def nerf_opponent_trainers(self):
+        """
+        """
+        pass
+
 
 class PokemonRedGameStateParser(GameStateParser):
     """
-    Reads from memory addresses to form the state: https://github.com/pret/pokered/blob/symbols/pokered.sym
+    Reads from memory addresses to form the state: https://github.com/pret/pokered/blob/symbols/pokered.sym and https://datacrystal.tcrf.net/wiki/Pok%C3%A9mon_Red_and_Blue/RAM_map    
     """
     _PAD = 20
     _GLOBAL_MAP_SHAPE = (444 + _PAD * 2, 436 + _PAD * 2)
@@ -54,14 +144,15 @@ class PokemonRedGameStateParser(GameStateParser):
         beat_opponent_events = bidict()
         def _pop(d, keys):
             for key in keys:
-                d.pop(key, None)        
+                if key in d:
+                    d.pop(key, None)        
         pop_queue = []
         for name, slot in event_names.items():
             if name.startswith("Beat "):
                 beat_opponent_events[name.replace("Beat ", "")] = slot
                 pop_queue.append(name)
         _pop(event_names, pop_queue)
-        self.beat_opponent_events = beat_opponent_events
+        self.defeated_opponent_events = beat_opponent_events
         """Events related to beating specific opponents. E.g. Beat Brock"""
         tms_obtained_events = bidict()
         pop_queue = []
@@ -114,10 +205,16 @@ class PokemonRedGameStateParser(GameStateParser):
                 self.map_events["Seafoam Islands"][name] = slot
                 pop_queue.append(name)
         _pop(event_names, pop_queue)
-        cutscene_events = bidict()
+        self.cutscene_events = bidict()
+        """ Flags for cutscene based events. TODO: Check if these are actually flags etc. """
+
         cutscenes = ["Event 001", "Daisy Walking", "Pokemon Tower Rival On Left", "Seel Fan Boast", "Pikachu Fan Boast", "Lab Handing Over Fossil Mon", "Route22 Rival Wants Battle"] # my best guess, need to verify, Silph Co Receptionist At Desk? Autowalks?
-
-
+        pop_queue = []
+        for name, slot in event_names.items():
+            if name in cutscenes:
+                self.cutscene_events[name] = slot
+                pop_queue.append(name)
+        _pop(event_names, pop_queue)
         self.special_events = bidict(event_names)
         """ All other events not categorized elsewhere."""
 
@@ -178,9 +275,20 @@ class PokemonRedGameStateParser(GameStateParser):
         #return self.pyboy.get_memory_value(addr)
         return self._pyboy.memory[addr]
 
+    def read_bits(self, addr) -> str:
+        """
+        Reads a memory address and returns the result as a binary string. Adds padding so that reading bit 0 works correctly. 
+        Args:
+            addr (int): The memory address to read from.
+        Returns:
+            str: The binary string representation of the byte at the specified memory address.
+        """
+        # add padding so zero will read '0b100000000' instead of '0b0'
+        return bin(256 + self.read_m(addr))
+
     def read_bit(self, addr, bit: int) -> bool:
         """
-        Reads a specific bit from a memory address. Adds padding so that reading bit 0 works correctly. (from https://github.com/PWhiddy/PokemonRedExperiments)
+        Reads a specific bit from a memory address.
         Args:
             addr (int): The memory address to read from.
             bit (int): The bit position to read (0-7).
@@ -188,16 +296,103 @@ class PokemonRedGameStateParser(GameStateParser):
             bool: True if the bit is set (1), False otherwise.
         """
         # add padding so zero will read '0b100000000' instead of '0b0'
-        return bin(256 + self.read_m(addr))[-bit - 1] == "1"
+        return self.read_bits(addr)[-bit - 1] == "1"
+    
+    def read_m_bit(self, addr_bit: str) -> bool:
+        """
+        Reads a specific addr-bit string from a memory address. 
+        Args:
+            addr_bit (str): The - concatenation of a memory address and the bit position (e.g. '0xD87D-5')
+        Returns:
+            bool: True if the bit at that memory address is set (1), False otherwise
+        """
+        if "-" not in addr_bit:
+            log_error(f"Incorrect format addr_bit: {addr_bit}", self._parameters)
+        addr, bit = addr_bit.split("-")        
+        flag = False
+        try:
+            addr = eval(addr)
+        except:
+            flag = True
+        if flag:
+            log_error(f"Could not eval byte string: {addr}. Check format", self._parameters)
+        if not bit.isdigit():
+            log_error(f"bit {bit} is not digit", self._parameters)
+        bit = int(bit)
+        return self.read_bit(addr, bit)
 
-    def read_event_bits(self):
+    def read_consecutive_m(self, start_addr, n_slots):
+        # TODO: 
+        pass
+
+    def _get_items(self, item_dict):
+        items = set()
+        for item_name, slot in item_dict.items():
+            if self.read_m_bit(slot):
+                items.add(item_name)
+        return items
+
+    def get_opponents_defeated(self) -> Set[str]:
         """
-        TODO: Redo
+        Returns a set of all defeated opponents.
+        
         """
-        return [
-            int(bit) for i in range(event_flags_start, event_flags_end) 
-            for bit in f"{self.read_m(i):08b}"
-        ]
+        return self._get_items(self.defeated_opponent_events)
+    
+    def get_all_opponents(self) -> Set[str]:
+        """
+        Returns a set of all possible opponents. 
+        """
+        return set(self.defeated_opponent_events.keys())
+    
+    # Same for TMs and HMs and Key Items
+    def get_obtained_tms(self) -> Set[str]:
+        """
+        Returns a set of all obtained TMs.
+        """
+        return self._get_items(self.tms_obtained_events)
+
+    def get_all_tms(self) -> Set[str]:
+        """
+        Returns a set of all TMs.
+        """
+        return set(self.tms_obtained_events.keys())
+    
+    def get_obtained_hms(self) -> Set[str]:
+        """
+        Returns a set of all obtained HMs.
+        """
+        return self._get_items(self.hm_obtained_events)
+    
+    def get_all_hms(self) -> Set[str]:
+        """
+        Returns a set of all HMs.
+        """
+        return set(self.hm_obtained_events.keys())
+
+    def get_obtained_key_items(self) -> Set[str]:
+        """
+        Returns a set of all obtained key items.        
+        """
+        return self._get_items(self.key_items_obtained_events)
+
+    def get_all_key_items(self) -> Set[str]:
+        """
+        Returns a set of all key items.
+        """
+        return set(self.key_items_obtained_events.keys())
+
+    def get_cutscene_events(self) -> Set[str]:
+        """
+        Returns a set of all triggered cutscene events.
+        """
+        return self._get_items(self.cutscene_events)
+    
+    def get_all_cutscene_events(self) -> Set[str]:
+        """
+        Returns a set of all cutscene events.
+        """
+        return set(self.cutscene_events.keys())
         
     def get_local_coords(self) -> tuple[int, int, int]:
         """
@@ -215,54 +410,6 @@ class PokemonRedGameStateParser(GameStateParser):
         """
         x_pos, y_pos, map_n = self.get_local_coords()
         return self.local_to_global(y_pos, x_pos, map_n)
-
-    def read_hp_fraction(self):
-        """
-        TODO: Understand
-        """
-        hp_sum = sum([
-            self.read_hp(add)
-            for add in [0xD16C, 0xD198, 0xD1C4, 0xD1F0, 0xD21C, 0xD248]
-        ])
-        max_hp_sum = sum([
-            self.read_hp(add)
-            for add in [0xD18D, 0xD1B9, 0xD1E5, 0xD211, 0xD23D, 0xD269]
-        ])
-        max_hp_sum = max(max_hp_sum, 1)
-        return hp_sum / max_hp_sum
-
-    def read_hp(self, start):
-        """
-        TODO: Understand
-        """
-        return 256 * self.read_m(start) + self.read_m(start + 1)
-        
-    def idk_imp(self):
-        self.base_event_flags = sum([
-                self.bit_count(self.read_m(i))
-                for i in range(event_flags_start, event_flags_end)
-        ])
-        self.pcount = self.read_m(0xD163)
-
-    def get_levels(self) -> list[int]:
-        """
-        Gets the levels of the player's party Pokemon.
-        Returns:
-            list[int]: List of levels for each Pokemon in the party. (-5 if the pokemon slot is empty)
-        """
-        return [
-            self.read_m(a) for a in [0xD18C, 0xD1B8, 0xD1E4, 0xD210, 0xD23C, 0xD268]
-        ]    
-
-    def get_opponent_levels(self) -> list:
-        """
-        Gets the levels of the opponent's Pokemon in battle.
-        Returns:
-            list: List of levels for each opponent Pokemon in the battle.
-        """
-        opp_base_level = 5
-        opponent_levels = [self.read_m(a) for a in [0xD8C5, 0xD8F1, 0xD91D, 0xD949, 0xD975, 0xD9A1]]
-        return [level - opp_base_level for level in opponent_levels] # TODO: confirm base level
 
     def get_badges(self) -> np.array:
         """
@@ -306,6 +453,111 @@ class PokemonRedGameStateParser(GameStateParser):
         min_poke_level = 2 # I don't know how this fits in yet. Do we take offset?
         return [self.read_m(addr) for addr in [0xD18C, 0xD1B8, 0xD1E4, 0xD210, 0xD23C, 0xD268]]
     
+    def _get_current_menu_item(self) -> int:
+        """
+        Returns the integer index of the current item that the player selection cursor is hovering over in a menu.
+
+        Returns:
+            int: The index of the current (OR PREVIOUSLY CLOSED) menu item. 
+            Cannot be used as an indicator for menu_open
+        """
+        return self.read_m(0xCC26)
+    
+    def get_n_menu_items(self) -> int:
+        """
+        Returns the integer number of items in the current menu.
+
+        Returns:
+            int: The number of items in the current menu.
+            Cannot be used as an indicator for menu_open (i.e. never returns 0)
+        """
+        return self.read_m(0xCC28)
+
+    # TODO Section:
+    def get_player_pokemon(self, party_id: int) -> Pokemon:
+        """
+        Returns a Pokemon object representing the player's Pokemon at the specified party index.
+
+        Args:
+            party_id (int): The index of the Pokemon in the player's party (0-5).
+
+        Returns:
+            Pokemon: The Pokemon object representing the player's Pokemon.
+        """
+        # The pokemon initializer takes:
+        # class Pokemon: __init__(self, species, type1, type2, level, current_hp, status, hp_ev, attack_ev, defense_ev, speed_ev, special_ev, attack_defense_iv, speed_special_iv, max_hp, attack, defense, speed, special, move1, move2, move3, move4, move_1_pp, move_2_pp, move_3_pp, move_4_pp)
+        if party_id == 0:
+            # set the relevant variables here
+            pass
+        elif party_id == 1:
+            # set
+            pass
+        elif party_id == 2:
+            # set
+            pass
+        elif party_id == 3:
+            pass
+        elif party_id == 4:
+            pass
+        elif party_id == 5:
+            pass
+        elif party_id == 6:
+            pass
+        else:
+            log_error(f"Only 6 pokemon max", self._parameters)
+        return Pokemon(self.read_m(species_addr), self.read_m(type1_addr), self.read_m(type2_addr), 
+                       self.read_m(level_addr), self.read_m(current_hp_addr), self.read_m(status_addr), self.read_m(hp_ev_addr), self.read_m(attack_ev_addr), self.read_m(defense_ev_addr), self.read_m(speed_ev_addr), self.read_m(special_ev_addr), self.read_m(attack_defense_iv_addr), self.read_m(speed_special_iv_addr), self.read_m(max_hp_addr), self.read_m(attack_addr), self.read_m(defense_addr), self.read_m(speed_addr), self.read_m(special_addr), self.read_m(move1_addr), self.read_m(move2_addr), self.read_m(move3_addr), self.read_m(move4_addr), self.read_m(move_1_pp_addr), self.read_m(move_2_pp_addr), self.read_m(move_3_pp_addr), self.read_m(move_4_pp_addr))
+
+    def get_opponent_pokemon(self, party_id: int) -> Pokemon:
+        """
+        Returns a Pokemon object representing the enemy's Pokemon at the specified index.
+
+        Args:
+            enemy_id (int): The index of the enemy Pokemon (0 for single battles, 0 and 1 for double battles).
+        Returns:
+            Pokemon: The Pokemon object representing the enemy's Pokemon.
+        """
+                # The pokemon initializer takes:
+        # class Pokemon: __init__(self, species, type1, type2, level, current_hp, status, hp_ev, attack_ev, defense_ev, speed_ev, special_ev, attack_defense_iv, speed_special_iv, max_hp, attack, defense, speed, special, move1, move2, move3, move4, move_1_pp, move_2_pp, move_3_pp, move_4_pp)
+        if party_id == 0:
+            # set the relevant variables here
+            pass
+        elif party_id == 1:
+            # set
+            pass
+        elif party_id == 2:
+            # set
+            pass
+        elif party_id == 3:
+            pass
+        elif party_id == 4:
+            pass
+        elif party_id == 5:
+            pass
+        elif party_id == 6:
+            pass
+        else:
+            log_error(f"Only 6 pokemon max", self._parameters)
+        return Pokemon(self.read_m(species_addr), self.read_m(type1_addr), self.read_m(type2_addr), 
+                       self.read_m(level_addr), self.read_m(current_hp_addr), self.read_m(status_addr), self.read_m(hp_ev_addr), self.read_m(attack_ev_addr), self.read_m(defense_ev_addr), self.read_m(speed_ev_addr), self.read_m(special_ev_addr), self.read_m(attack_defense_iv_addr), self.read_m(speed_special_iv_addr), self.read_m(max_hp_addr), self.read_m(attack_addr), self.read_m(defense_addr), self.read_m(speed_addr), self.read_m(special_addr), self.read_m(move1_addr), self.read_m(move2_addr), self.read_m(move3_addr), self.read_m(move4_addr), self.read_m(move_1_pp_addr), self.read_m(move_2_pp_addr), self.read_m(move_3_pp_addr), self.read_m(move_4_pp_addr))
+
+    def get_all_player_pokemon(self) -> List[Pokemon]:
+        """
+        """
+        pass
+
+    def get_all_opponent_pokemon(self) -> List[Pokemon]:
+        pass
+
+    def get_species_caught(self) -> List[str]:
+        # Go through PokeDex, find all caught species
+        pass
+
+    def get_species_seen(self) -> List[str]:
+        # Go through PokeDex, find all seen species
+        pass
+
+
     def __repr__(self):
         return "PokemonRed"
     
@@ -319,12 +571,28 @@ class PokemonRedGameStateParser(GameStateParser):
         self.parsed_variables["party_size"] = self.get_party_size()
         self.parsed_variables["party_levels"] = self.read_party_levels()
         self.parsed_variables["badges"] = self.get_badges()
-        self.parsed_variables["hp_fraction"] = self.read_hp_fraction()
-        self.parsed_variables["event_flags"] = self.read_event_bits()
-        self.parsed_variables["opponent_levels"] = self.get_opponent_levels()
-        self.parsed_variables["player_level"] = self.get_levels()[0]
-        self.parsed_variables["event_flags"] = self.read_event_bits()
-        self.parsed_variables["opponent_levels"] = self.get_opponent_levels()
+        self.parsed_variables["opponents_defeated"] = self.get_opponents_defeated()
+        self.parsed_variables["tms_obtained"] = self.get_obtained_tms()
+        self.parsed_variables["hms_obtained"] = self.get_obtained_hms()
+        self.parsed_variables["key_items_obtained"] = self.get_obtained_key_items()
+        self.parsed_variables["cutscene_events_triggered"] = self.get_cutscene_events()
+        self.parsed_variables["menu_item_idx"] = self._get_current_menu_item()
+        self.parsed_variables["menu_length"] = self.get_n_menu_items()
+        test_bit_strings = ["d8a6"] # enemy p1 hp 
+        # d12e maybe can still do something
+        test_bits = []
+        for bit_string in test_bit_strings:
+            test_bits.append(f"0x{bit_string}")
+        for test in test_bits:
+            self.parsed_variables[f"test_bit_{test}"] = self.read_m(eval(test))
+        #self._pyboy.memory[0xd8a6] = 1
+        #self._pyboy.memory[0xD8C1] = 0
+        #self._pyboy.memory[0xD8C2] = 0        
+        #self._pyboy.memory[0xD8C3] = 0
+        #self._pyboy.memory[0xD8C4] = 0
+        
+
+
 
     
 

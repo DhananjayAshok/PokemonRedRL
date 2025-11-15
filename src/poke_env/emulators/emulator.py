@@ -508,7 +508,7 @@ class Emulator(ABC):
             "r": LowLevelActions.PRESS_ARROW_RIGHT,            
             "": None,
         }
-        msg = "Starting human play mode. Use keyboard inputs: a,b,s,u,d,l,r to play. Type v to start recording, c to end recording, e to exit."
+        msg = "Starting human play mode. Use keyboard inputs: a,b,s,u,d,l,r to play. Type v to start recording, c to end recording, i1 to save state and i2 to identify the addresses that have changed, and e to exit."
         log_info(msg, self._parameters)
         log_info(f"Character to action mapping: \n{character_to_action}", self._parameters)
         self.reset()
@@ -527,6 +527,9 @@ class Emulator(ABC):
                 self.close_video()
                 log_info("Stopped recording video.", self._parameters)                
                 continue
+            if user_input == "i":
+                    breakpoint()
+                    continue
             if user_input not in character_to_action:
                 log_warn(f"Invalid input {user_input}. Valid inputs are: {list(character_to_action.keys())} or e to exit.", self._parameters)
                 continue
@@ -601,3 +604,19 @@ class Emulator(ABC):
         :return: string name identifier of the particular env e.g. PokemonRed
         """
         raise NotImplementedError
+    
+
+def bytes_to_padded_hex_string(integer_value):
+    """
+    Converts a bytes object into a padded, '0x'-prefixed hexadecimal string.
+    """
+    # 1. Convert the bytes object back into an integer
+    # Assumes big-endian order for the example '0x00a' -> 10
+    # 2. Format the integer into a string with padding and the '0x' prefix
+    # The 'x' specifier for hex, '#' adds '0x', '04' pads to 4 hex characters total
+    # (not including the '0x' prefix for simple formatters like this, but managing width)
+    
+    # A robust approach to match your exact output '0x00a':
+    # You generally want enough width for your bytes. b'\n' is 1 byte, 2 hex chars.
+
+    return f'0x{integer_value:04x}' # {0:04x} pads to 4 digits specifically
